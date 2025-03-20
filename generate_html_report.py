@@ -6,42 +6,157 @@ import io
 import base64
 from collections import Counter, defaultdict
 import csv
+import boto3
+import os
+import traceback
+import pytz
 
-def load_csv_data(file_path, old_file_path):
-    """Load CSV data from the specified file path"""
+def get_s3_client():
+    """Create and return an S3 client"""
+    return boto3.client('s3')
+
+def get_s3_path(base_path, use_previous_day=False):
+    """Generate S3 path with date-based subdirectories using IST timezone"""
+    ist = pytz.timezone('Asia/Kolkata')
+    now = datetime.now(ist)
+    if use_previous_day:
+        now = now.replace(day=now.day - 1)
+    date_path = f"{now.year}/{now.month:02d}/{now.day:02d}"
+    return f"{base_path}/{date_path}"
+
+def download_from_s3(bucket, key):
+    """Download a file from S3 and return its contents"""
     try:
-        hostname_to_route53 = {}
+        s3_client = get_s3_client()
+        response = s3_client.get_object(Bucket=bucket, Key=key)
+        return response['Body'].read().decode('utf-8')
+    except Exception as e:
+        print(f"Error downloading from S3: {e}")
+        return None
+
+def upload_to_s3(bucket, key, content):
+    """Upload content to S3"""
+    try:
+        s3_client = get_s3_client()
+        s3_client.put_object(Bucket=bucket, Key=key, Body=content)
+        print(f"Successfully uploaded {key} to {bucket}")
+    except Exception as e:
+        print(f"Error uploading to S3: {e}")
+
+def upload_generated_files_to_s3(bucket, base_path, output_file):
+    """Upload generated files to S3 bucket with date-based subdirectories"""
+    try:
+        # Generate the S3 path with date-based subdirectories
+        s3_path = get_s3_path(base_path)
+        
+        # Upload the HTML report
+        with open(output_file, 'r') as f:
+            s3_key = f"{s3_path}/{output_file}"
+            upload_to_s3(bucket, s3_key, f.read())
+        
+        # Upload the vpn_ips.txt file
+        if os.path.exists('vpn_ips.txt'):
+            with open('vpn_ips.txt', 'r') as f:
+                s3_key = f"{s3_path}/vpn_ips.txt"
+                upload_to_s3(bucket, s3_key, f.read())
+
+        # Upload the public_out.json if it exists
+        if os.path.exists('public_out.json'):
+            with open('public_out.json', 'r') as f:
+                s3_key = f"{s3_path}/public_out.json"
+                upload_to_s3(bucket, s3_key, f.read())
+        
+        # Upload r53 csv file
+        if os.path.exists('output_r53.csv'):
+            with open('output_r53.csv', 'r') as f:
+                s3_key = f"{s3_path}/output_r53.csv"
+                upload_to_s3(bucket, s3_key, f.read())
+        print(f"Successfully uploaded all generated files to S3 bucket: {bucket} under path: {s3_path}")
+    except Exception as e:
+        print(f"Error uploading generated files to S3: {e}")
+
+def load_cmap_json_from_local(file_path):
+    """Load JSON data from local file"""
+    try:
+        with open(file_path, 'r') as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"Error loading CloudMapper JSON data from local file: {e}")
+        return None
+
+def load_cmap_json_from_s3(bucket, base_path, file_path):
+    """Load JSON data from S3"""
+    try:
+        s3_path = get_s3_path(base_path, use_previous_day=True)
+        content = download_from_s3(bucket, f"{s3_path}/{file_path}")
+        if content:
+            print(f"Loaded CloudMapper JSON data from S3 file: {file_path}")
+            return json.loads(content)
+        print(f"No old CloudMapper JSON data found in S3")
+        return None
+    except Exception as e:
+        print(f"Error loading CloudMapper JSON data from S3: {e}")
+        return None
+
+def load_r53_csv_from_local(file_path):
+    """Load CSV data from local file"""
+    try:
+        with open(file_path, 'r') as f:
+            return list(csv.reader(f))
+    except Exception as e:
+        print(f"Error loading R53 CSV data from local file: {e}")
+        return None
+
+def load_r53_csv_from_s3(bucket, base_path, file_path):
+    """Load CSV data from S3"""
+    try:
+        s3_path = get_s3_path(base_path, use_previous_day=True)
+        content = download_from_s3(bucket, f"{s3_path}/{file_path}")
+        if content:
+            print(f"Loaded R53 CSV data from S3 file: {file_path}")
+            return list(csv.reader(io.StringIO(content)))
+        print(f"No old R53 CSV data found in S3")
+        return None
+    except Exception as e:
+        print(f"Error loading R53 CSV data from S3: {e}")
+        return None
+
+def process_csv_data(current_data, previous_data):
+    """Process CSV data and return route53 mapping and counts"""
+    hostname_to_route53 = {}
+    try:
         new_r53_set = set()
         old_r53_set = set()
-        for i, file_path in enumerate([file_path, old_file_path]):
-            old_data = False
+
+        for i, data in enumerate([current_data, previous_data]):
+            if not data:
+                continue
+            is_old_data = False
             if i == 1:
-                old_data = True
-            with open(file_path, 'r') as f:
-                csv_reader = csv.reader(f)
-                # next(csv_reader)  # Skip header row
-                for row in csv_reader:
-                    if len(row) >= 3:  # Ensure row has at least 3 columns
-                        route53_name = row[0]
-                        hostname = row[1]
-                        security_group = row[2]
-                        if 'dualstack.' in hostname:
-                            hostname = hostname.split('dualstack.')[1]
-                        if hostname[-1] == '.':
-                            hostname = hostname[:-1]
-                        
-                        # Initialize list for this hostname if it doesn't exist
-                        if hostname not in hostname_to_route53:
-                            hostname_to_route53[hostname] = []
-                        if old_data:
-                            old_r53_set.add(hostname)
-                        else:
-                            new_r53_set.add(hostname)
-                        # Add the new mapping to the list
-                        hostname_to_route53[hostname].append({
-                            'name': route53_name,
-                            'security_group': security_group
-                        })
+                is_old_data = True
+
+            for row in data:
+                if len(row) >= 3:  # Ensure row has at least 3 columns
+                    route53_name = row[0]
+                    hostname = row[1]
+                    security_group = row[2]
+                    if 'dualstack.' in hostname:
+                        hostname = hostname.split('dualstack.')[1]
+                    if hostname[-1] == '.':
+                        hostname = hostname[:-1]
+                    
+                    # Initialize list for this hostname if it doesn't exist
+                    if hostname not in hostname_to_route53:
+                        hostname_to_route53[hostname] = []
+                    if is_old_data:
+                        old_r53_set.add(hostname)
+                    else:
+                        new_r53_set.add(hostname)
+                    # Add the new mapping to the list
+                    hostname_to_route53[hostname].append({
+                        'name': route53_name,
+                        'security_group': security_group
+                    })
         deleted_r53_set = old_r53_set.difference(new_r53_set)
         new_r53_set = new_r53_set.difference(old_r53_set)
         del_r53_count = len(deleted_r53_set)
@@ -52,23 +167,14 @@ def load_csv_data(file_path, old_file_path):
         for hostname in new_r53_set:
             for item in hostname_to_route53[hostname]:
                 item['new'] = True
-                    
+
         return hostname_to_route53, {
             'del_r53_count': del_r53_count,
             'new_r53_count': new_r53_count
         }
     except Exception as e:
-        print(f"Error loading CSV data: {e}")
-        return None
-
-def load_json_data(file_path):
-    """Load JSON data from the specified file path"""
-    try:
-        with open(file_path, 'r') as f:
-            return json.load(f)
-    except Exception as e:
-        print(f"Error loading JSON data: {e}")
-        return None
+        print(f"Error processing CSV data: {e} stacktrace: {traceback.format_exc()}")
+        return hostname_to_route53, {'del_r53_count': 0, 'new_r53_count': 0}
 
 def generate_resource_type_chart(data):
     """Generate a pie chart for resource types"""
@@ -733,7 +839,7 @@ def generate_html_report(data, output_file, old_data, route53_mapping=None, misc
     </body>
     </html>
     """
-    
+
     # Write HTML to file
     with open(output_file, 'w') as f:
         f.write(html_content)
@@ -757,14 +863,17 @@ Examples:
 
     # Generate report with change tracking
     python generate_html_report.py -i current.json -p previous.json -r current_r53.csv -rpre previous_r53.csv
+
+    # Generate report with S3 integration
+    python generate_html_report.py -i current.json -r current_r53.csv --s3-bucket my-bucket --s3-base-path border_police
         """
     )
 
     # Input/Output arguments
     io_group = parser.add_argument_group('Input/Output Options')
     io_group.add_argument('--input', '-i',
-                         default='stage_public.json',
-                         help='Path to the current JSON file containing AWS resource data (default: stage_public.json)')
+                         default='public_out.json',
+                         help='Path to the current JSON file containing AWS resource data (default: public_out.json)')
     io_group.add_argument('--output', '-o',
                          default='aws_public_resources_report.html',
                          help='Path for the output HTML report (default: aws_public_resources_report.html)')
@@ -772,34 +881,57 @@ Examples:
     # Change tracking arguments
     change_group = parser.add_argument_group('Change Tracking Options')
     change_group.add_argument('--input_old', '-p',
-                             default='stage_public.json',
-                             help='Path to the previous JSON file for change tracking (default: stage_public.json)')
+                             help='Path to the previous JSON file for change tracking (default: public_out_old.json)')
 
     # Route 53 mapping arguments
     route53_group = parser.add_argument_group('Route 53 Mapping Options')
-    route53_group.add_argument('--route53', '-r',
+    route53_group.add_argument('--route53', '-r', default='output_r53.csv',
                               help='Path to CSV file containing current Route 53 mappings. Format: Route53Name,Hostname,SecurityGroup')
     route53_group.add_argument('--route53_old', '-rpre',
                               help='Path to CSV file containing previous Route 53 mappings for change tracking')
+
+    # S3 arguments
+    s3_group = parser.add_argument_group('S3 Options')
+    s3_group.add_argument('--s3-bucket', default='prod-m-devops-reports',
+                         help='S3 bucket name for reading/writing files')
+    s3_group.add_argument('--s3-base-path', default='border_police',
+                         help='Base path in S3 bucket (e.g., border_police)')
     
     args = parser.parse_args()
     
-    # Load JSON data
-    data = load_json_data(args.input)
+    data = load_cmap_json_from_local(args.input)
     if not data:
         return
 
     old_json = []
-    if args.input_old:
-        old_json = load_json_data(args.input_old)
 
-    # Load Route 53 mapping if provided
+    if args.input_old:
+        print("Loading old JSON data from local file")
+        old_json = load_cmap_json_from_local(args.input_old)
+    elif args.s3_bucket and args.s3_base_path:
+        print("Loading old JSON data from S3")
+        old_json = load_cmap_json_from_s3(args.s3_bucket, args.s3_base_path, "public_out.json")
+
     route53_mapping = None
     if args.route53:
-        route53_mapping, misc_info = load_csv_data(args.route53, args.route53_old)
+        current_csv = load_r53_csv_from_local(args.route53)
+        if not current_csv:
+            return
+
+        old_csv = None
+        if args.route53_old:
+            print("Loading old CSV data from local file")
+            old_csv = load_r53_csv_from_local(args.route53_old)
+        elif args.s3_bucket and args.s3_base_path:
+            print("Loading old CSV data from S3")
+            old_csv = load_r53_csv_from_s3(args.s3_bucket, args.s3_base_path, "output_r53.csv")
+
+        route53_mapping, misc_info = process_csv_data(current_csv, old_csv)
     
-    # Generate HTML report
     generate_html_report(data, args.output, old_json, route53_mapping, misc_info)
+
+    if args.s3_bucket and args.s3_base_path:
+        upload_generated_files_to_s3(args.s3_bucket, args.s3_base_path, args.output)
 
 if __name__ == "__main__":
     main() 

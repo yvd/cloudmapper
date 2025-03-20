@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  cloudmapper:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cloudmapper
+    volumes:
+      - ./:/app
+      - cloudmapper_logs:/var/log
+    environment:
+      - AWS_DEFAULT_REGION=us-east-1
+      - S3_BUCKET=${S3_BUCKET:-}  # S3 bucket name for storing files
+      # Add other AWS credentials if needed
+      # - AWS_ACCESS_KEY_ID=your_access_key
+      # - AWS_SECRET_ACCESS_KEY=your_secret_key
+    restart: always
+    # Uncomment the following if you need to specify a different timezone for the cron job
+    # environment:
+    #   - TZ=UTC
+
+volumes:
+  cloudmapper_logs: 
