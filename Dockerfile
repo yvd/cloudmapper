@@ -1,17 +1,17 @@
-FROM python:3.7-slim as cloudmapper
+FROM python:3.10.16-bullseye as cloudmapper
 
-LABEL maintainer="https://github.com/0xdabbad00/"
-LABEL Project="https://github.com/duo-labs/cloudmapper"
-
-EXPOSE 8000
-WORKDIR /opt/cloudmapper
-ENV AWS_DEFAULT_REGION=us-east-1 
+WORKDIR /app
 
 RUN apt-get update -y
-RUN apt-get install -y build-essential autoconf automake libtool python3-tk jq awscli
-RUN apt-get install -y bash
+RUN apt-get install -y build-essential dnsutils autoconf automake libtool python3-tk jq awscli bash
 
-COPY . /opt/cloudmapper
+COPY requirements.txt /app/
 RUN pip install -r requirements.txt
 
-RUN bash
+ENV AWS_DEFAULT_REGION=us-east-1
+
+COPY . /app/
+COPY bin/entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
+ENTRYPOINT ["/app/entrypoint.sh"]
