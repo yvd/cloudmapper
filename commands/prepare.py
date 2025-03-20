@@ -51,6 +51,7 @@ from shared.nodes import (
     Cidr,
     Connection,
 )
+from tqdm import tqdm
 
 __description__ = "Generate network connection information file"
 
@@ -364,12 +365,12 @@ def get_resource_nodes(region, outputfilter):
         )
         nodes[node.arn] = node
 
-    # RDS nodes
-    for rds_json in get_rds_instances(region):
-        node = Rds(region, rds_json)
-        if not outputfilter.get("read_replicas", False) and node.node_type == "rds_rr":
-            continue
-        nodes[node.arn] = node
+    # # RDS nodes
+    # for rds_json in get_rds_instances(region):
+    #     node = Rds(region, rds_json)
+    #     if not outputfilter.get("read_replicas", False) and node.node_type == "rds_rr":
+    #         continue
+    #     nodes[node.arn] = node
 
     # ELB nodes
     for elb_json in get_elbs(region):
@@ -386,24 +387,24 @@ def get_resource_nodes(region, outputfilter):
         nodes[node.arn] = node
 
     # ECS tasks
-    for ecs_json in get_ecs_tasks(region):
-        node = Ecs(region, ecs_json)
-        nodes[node.arn] = node
+    # for ecs_json in get_ecs_tasks(region):
+    #     node = Ecs(region, ecs_json)
+    #     nodes[node.arn] = node
 
     # Lambda functions
-    for lambda_json in get_lambda_functions(region):
-        node = Lambda(region, lambda_json)
-        nodes[node.arn] = node
+    # for lambda_json in get_lambda_functions(region):
+    #     node = Lambda(region, lambda_json)
+    #     nodes[node.arn] = node
 
-    # Redshift clusters
-    for node_json in get_redshift(region):
-        node = Redshift(region, node_json)
-        nodes[node.arn] = node
+    # # Redshift clusters
+    # for node_json in get_redshift(region):
+    #     node = Redshift(region, node_json)
+    #     nodes[node.arn] = node
 
-    # ElasticSearch clusters
-    for node_json in get_elasticsearch(region):
-        node = ElasticSearch(region, node_json)
-        nodes[node.arn] = node
+    # # ElasticSearch clusters
+    # for node_json in get_elasticsearch(region):
+    #     node = ElasticSearch(region, node_json)
+    #     nodes[node.arn] = node
 
     return nodes
 
@@ -421,7 +422,7 @@ def build_data_structure(account_data, config, outputfilter):
     cytoscape_json.append(account.cytoscape_data())
 
     # Iterate through each region and add all the VPCs, AZs, and Subnets
-    for region_json in get_regions(account, outputfilter):
+    for region_json in tqdm(get_regions(account, outputfilter), desc="regions"):
         region = Region(account, region_json)
 
         # Build the tree hierarchy

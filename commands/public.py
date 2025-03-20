@@ -14,8 +14,8 @@ def public(accounts, config):
         public_nodes, warnings = get_public_nodes(account, config)
         for public_node in public_nodes:
             all_accounts.append(public_node)
-        for warning in warnings:
-            print("WARNING: {}".format(warning), file=sys.stderr)
+        # for warning in warnings:
+            # print("WARNING: {}".format(warning), file=sys.stderr)
 
     print(json.dumps(all_accounts, indent=4, sort_keys=True))
 

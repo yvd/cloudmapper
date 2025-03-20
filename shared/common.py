@@ -301,10 +301,12 @@ def get_account_stats(account, all_resources=False):
                     )
                     for bucket in buckets:
                         # Get the bucket's location
-                        bucket_region = get_parameter_file(
+                        loaded_file = get_parameter_file(
                             region, "s3", "get-bucket-location", bucket
-                        )["LocationConstraint"]
-
+                        )
+                        if not loaded_file:
+                            continue
+                        bucket_region = loaded_file["LocationConstraint"]
                         # Convert the value to a name.
                         # See https://docs.aws.amazon.com/general/latest/gr/rande.html#s3_region
                         if bucket_region is None:

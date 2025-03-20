@@ -2,7 +2,7 @@ from __future__ import print_function
 import json
 import os
 import pyjq
-
+from tqdm import tqdm
 from shared.nodes import Account, Region, is_public_ip
 from commands.prepare import build_data_structure
 from shared.common import get_regions, query_aws
@@ -91,9 +91,9 @@ def get_public_nodes(account, config, use_cache=False):
     warnings = []
 
     # Look at all the edges for ones connected to the public Internet (0.0.0.0/0)
-    for edge in pyjq.all(
+    for edge in tqdm(pyjq.all(
         '.[].data|select(.type=="edge")|select(.source=="0.0.0.0/0")', network
-    ):
+    )):
 
         # Find the node at the other end of this edge
         target = {"arn": edge["target"], "account": account["name"]}

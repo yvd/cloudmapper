@@ -10,6 +10,7 @@ import boto3
 import yaml
 import pyjq
 import urllib.parse
+from tqdm import tqdm
 from botocore.exceptions import ClientError, EndpointConnectionError, NoCredentialsError
 from shared.common import get_account, custom_serializer
 from botocore.config import Config
@@ -78,7 +79,7 @@ def call_function(outputfile, handler, method_to_call, parameters, check, summar
         "parameters": parameters,
     }
 
-    print("  Making call for {}".format(outputfile), flush=True)
+    # print("  Making call for {}".format(outputfile), flush=True)
     try:
         for retries in range(MAX_RETRIES):
             if handler.can_paginate(method_to_call):
@@ -89,7 +90,7 @@ def call_function(outputfile, handler, method_to_call, parameters, check, summar
                     if not data:
                         data = response
                     else:
-                        print("  ...paginating", flush=True)
+                        # print("  ...paginating", flush=True)
                         for k in data:
                             if isinstance(data[k], list):
                                 data[k].extend(response[k])
@@ -324,11 +325,11 @@ def collect(arguments):
     with open("collect_commands.yaml", "r") as f:
         collect_commands = yaml.safe_load(f)
 
-    for runner in collect_commands:
-        print(
-            "* Getting {}:{} info".format(runner["Service"], runner["Request"]),
-            flush=True,
-        )
+    for runner in tqdm(collect_commands):
+        # print(
+        #     "* Getting {}:{} info".format(runner["Service"], runner["Request"]),
+        #     flush=True,
+        # )
 
         parameters = {}
         for region in region_list["Regions"]:
