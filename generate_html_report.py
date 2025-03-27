@@ -468,8 +468,8 @@ def generate_html_report(data, output_file, old_data, route53_mapping=None, misc
                 <p>Total resources: {len(data)}</p>
                 <p>New resources: {len(current_arns - old_arns)}</p>
                 <p>Removed resources: {len(old_arns - current_arns)}</p>
-                <p>New Route 53 records: {misc_info['new_r53_count']}</p>
-                <p>Removed Route 53 records: {misc_info['del_r53_count']}</p>
+                <p>New Route 53 records: {misc_info.get('new_r53_count', 0) if misc_info else 0}</p>
+                <p>Removed Route 53 records: {misc_info.get('del_r53_count', 0) if misc_info else 0}</p>
             </div>
             
             <div class="summary">
@@ -502,7 +502,42 @@ def generate_html_report(data, output_file, old_data, route53_mapping=None, misc
                     </ul>
                 </div>
             </div>
-            
+
+            <!-- New Route53 Entries Section -->
+            <div class="resource-section">
+                <h2>Newly Added Route53 Entries</h2>
+                <table>
+                    <tr>
+                        <th>Route53 Name</th>
+                        <th>Hostname</th>
+                        <th>Security Group</th>
+                    </tr>
+    """
+    
+    # Add rows for new Route53 entries
+    new_entries_found = False
+    if route53_mapping and misc_info and misc_info.get('new_r53_count', 0) > 0:
+        for hostname, mappings in route53_mapping.items():
+            for mapping in mappings:
+                if mapping.get('new'):
+                    new_entries_found = True
+                    html_content += "<tr>"
+                    html_content += f"<td><span class='route53-name route53-new'>{mapping['name']}</span></td>"
+                    html_content += f"<td>{hostname}</td>"
+                    html_content += f"<td><span class='security-group'>{mapping['security_group']}</span></td>"
+                    html_content += "</tr>"
+    
+    if not new_entries_found:
+        html_content += "<tr><td colspan='3'>No new Route53 entries found.</td></tr>"
+    
+    # Close the Route53 table
+    html_content += """
+                </table>
+            </div>
+    """
+    
+    # Add charts with proper f-string formatting
+    html_content += f"""
             <div class="chart-container">
                 <div class="chart">
                     <h3>Resource Type Distribution</h3>
@@ -930,8 +965,8 @@ Examples:
     
     generate_html_report(data, args.output, old_json, route53_mapping, misc_info)
 
-    if args.s3_bucket and args.s3_base_path:
-        upload_generated_files_to_s3(args.s3_bucket, args.s3_base_path, args.output)
+    # if args.s3_bucket and args.s3_base_path:
+    #     upload_generated_files_to_s3(args.s3_bucket, args.s3_base_path, args.output)
 
 if __name__ == "__main__":
     main() 
