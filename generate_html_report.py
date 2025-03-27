@@ -461,6 +461,19 @@ def generate_html_report(data, output_file, old_data, route53_mapping=None, misc
                 background-color: #f8d7da !important;
                 border: 1px solid #f5c6cb;
             }}
+            .nested-accordion {{
+                background-color: #f0f0f0;
+                margin-left: 15px;
+                font-size: 0.95em;
+                border-left: 4px solid #0066cc;
+            }}
+            .nested-panel {{
+                margin-left: 15px;
+                background-color: #fafafa;
+            }}
+            .active.nested-accordion {{
+                background-color: #e6e6e6;
+            }}
         </style>
     </head>
     <body>
@@ -567,25 +580,49 @@ def generate_html_report(data, output_file, old_data, route53_mapping=None, misc
     html_content += f"""
                 <button class="accordion">Show/Hide Unmapped Route53 Entries ({unmapped_count})</button>
                 <div class="panel">
-                    <table>
-                        <tr>
-                            <th>Route53 Name</th>
-                            <th>Hostname</th>
-                            <th>Security Group</th>
-                        </tr>
     """
-    
-    # Add rows for unmapped Route53 entries
-    unmapped_entries_found = False
+
+    # Group unmapped entries by security group
+    security_groups_to_entries = {}
     if route53_mapping:
         for hostname, mappings in route53_mapping.items():
             # Skip if this hostname is in our resources
             if hostname in resource_hostnames:
                 continue
                 
-            # This hostname doesn't match any resource
-            unmapped_entries_found = True
+            # Process unmapped entries
             for mapping in mappings:
+                security_group = mapping['security_group']
+                if security_group not in security_groups_to_entries:
+                    security_groups_to_entries[security_group] = []
+                
+                security_groups_to_entries[security_group].append({
+                    'hostname': hostname,
+                    'mapping': mapping
+                })
+    
+    # Display entries by security group
+    if security_groups_to_entries:
+        for sg, entries in security_groups_to_entries.items():
+            # Create a nested accordion for this security group
+            html_content += f"""
+                    <div class="resource-section" style="margin: 10px 0;">
+                        <button class="accordion nested-accordion" style="background-color: #f0f0f0;">
+                            Security Group: {sg} ({len(entries)} entries)
+                        </button>
+                        <div class="panel nested-panel">
+                            <table>
+                                <tr>
+                                    <th>Route53 Name</th>
+                                    <th>Hostname</th>
+                                </tr>
+            """
+            
+            # Add entries for this security group
+            for entry in entries:
+                hostname = entry['hostname']
+                mapping = entry['mapping']
+                
                 css_class = ""
                 if mapping.get('new'):
                     css_class = "route53-new"
@@ -595,15 +632,18 @@ def generate_html_report(data, output_file, old_data, route53_mapping=None, misc
                 html_content += "<tr>"
                 html_content += f"<td><span class='route53-name {css_class}'>{mapping['name']}</span></td>"
                 html_content += f"<td>{hostname}</td>"
-                html_content += f"<td><span class='security-group'>{mapping['security_group']}</span></td>"
                 html_content += "</tr>"
+            
+            html_content += """
+                            </table>
+                        </div>
+                    </div>
+            """
+    else:
+        html_content += "<p>No unmapped Route53 entries found.</p>"
     
-    if not unmapped_entries_found:
-        html_content += "<tr><td colspan='3'>No unmapped Route53 entries found.</td></tr>"
-    
-    # Close the unmapped Route53 table
+    # Close the unmapped Route53 outer panel
     html_content += """
-                    </table>
                 </div>
             </div>
     """
@@ -932,13 +972,33 @@ def generate_html_report(data, output_file, old_data, route53_mapping=None, misc
             var i;
             
             for (i = 0; i < acc.length; i++) {
-                acc[i].addEventListener("click", function() {
+                acc[i].addEventListener("click", function(e) {
+                    // Stop event propagation to prevent parent accordions from also toggling
+                    e.stopPropagation();
+                    
                     this.classList.toggle("active");
                     var panel = this.nextElementSibling;
                     if (panel.style.maxHeight) {
                         panel.style.maxHeight = null;
                     } else {
-                        panel.style.maxHeight = panel.scrollHeight + "px";
+                        // For nested panels, add the height of child panels
+                        var totalHeight = panel.scrollHeight;
+                        
+                        // Set the max height
+                        panel.style.maxHeight = totalHeight + "px";
+                        
+                        // If this panel is nested, also update parent panels' heights
+                        var parent = this.parentElement;
+                        while (parent) {
+                            var parentPanel = parent.closest('.panel');
+                            if (parentPanel) {
+                                var newHeight = parseInt(parentPanel.style.maxHeight || 0) + totalHeight;
+                                parentPanel.style.maxHeight = newHeight + "px";
+                                parent = parentPanel.parentElement;
+                            } else {
+                                break;
+                            }
+                        }
                     }
                 });
             }
