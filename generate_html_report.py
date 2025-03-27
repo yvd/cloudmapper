@@ -272,6 +272,9 @@ def generate_html_report(data, output_file, old_data, route53_mapping=None, misc
     current_arns = {item.get('arn') for item in data if 'arn' in item}
     old_arns = {item.get('arn') for item in old_data if 'arn' in item} if old_data else set()
     
+    # Get all hostnames from resources
+    resource_hostnames = {item.get('hostname') for item in data if 'hostname' in item}
+    
     # Generate charts
     resource_type_chart = generate_resource_type_chart(data)
     port_distribution_chart = generate_port_distribution_chart(data)
@@ -506,12 +509,20 @@ def generate_html_report(data, output_file, old_data, route53_mapping=None, misc
             <!-- New Route53 Entries Section -->
             <div class="resource-section">
                 <h2>Newly Added Route53 Entries</h2>
-                <table>
-                    <tr>
-                        <th>Route53 Name</th>
-                        <th>Hostname</th>
-                        <th>Security Group</th>
-                    </tr>
+    """
+    
+    # Get count of new Route53 entries
+    new_r53_count = misc_info.get('new_r53_count', 0) if misc_info else 0
+    
+    html_content += f"""
+                <button class="accordion">Show/Hide New Route53 Entries ({new_r53_count})</button>
+                <div class="panel">
+                    <table>
+                        <tr>
+                            <th>Route53 Name</th>
+                            <th>Hostname</th>
+                            <th>Security Group</th>
+                        </tr>
     """
     
     # Add rows for new Route53 entries
@@ -532,7 +543,68 @@ def generate_html_report(data, output_file, old_data, route53_mapping=None, misc
     
     # Close the Route53 table
     html_content += """
-                </table>
+                    </table>
+                </div>
+            </div>
+    """
+    
+    # Add section for unmapped Route53 entries
+    html_content += """
+            <div class="resource-section">
+                <h2>Unmapped Route53 Entries</h2>
+                <p>These Route53 entries don't match any resource hostname in the current inventory.</p>
+    """
+    
+    # Count unmapped Route53 entries
+    unmapped_count = 0
+    unmapped_hostnames = set()
+    if route53_mapping:
+        for hostname, mappings in route53_mapping.items():
+            if hostname not in resource_hostnames:
+                unmapped_hostnames.add(hostname)
+                unmapped_count += len(mappings)
+    
+    html_content += f"""
+                <button class="accordion">Show/Hide Unmapped Route53 Entries ({unmapped_count})</button>
+                <div class="panel">
+                    <table>
+                        <tr>
+                            <th>Route53 Name</th>
+                            <th>Hostname</th>
+                            <th>Security Group</th>
+                        </tr>
+    """
+    
+    # Add rows for unmapped Route53 entries
+    unmapped_entries_found = False
+    if route53_mapping:
+        for hostname, mappings in route53_mapping.items():
+            # Skip if this hostname is in our resources
+            if hostname in resource_hostnames:
+                continue
+                
+            # This hostname doesn't match any resource
+            unmapped_entries_found = True
+            for mapping in mappings:
+                css_class = ""
+                if mapping.get('new'):
+                    css_class = "route53-new"
+                elif mapping.get('deleted'):
+                    css_class = "route53-deleted"
+                
+                html_content += "<tr>"
+                html_content += f"<td><span class='route53-name {css_class}'>{mapping['name']}</span></td>"
+                html_content += f"<td>{hostname}</td>"
+                html_content += f"<td><span class='security-group'>{mapping['security_group']}</span></td>"
+                html_content += "</tr>"
+    
+    if not unmapped_entries_found:
+        html_content += "<tr><td colspan='3'>No unmapped Route53 entries found.</td></tr>"
+    
+    # Close the unmapped Route53 table
+    html_content += """
+                    </table>
+                </div>
             </div>
     """
     
