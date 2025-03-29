@@ -16,6 +16,26 @@ def get_s3_client():
     """Create and return an S3 client"""
     return boto3.client('s3')
 
+def load_account_info(config_file='config.json'):
+    """Load AWS account information from config.json"""
+    try:
+        with open(config_file, 'r') as f:
+            config = json.load(f)
+        
+        # Extract account information
+        accounts = config.get('accounts', [])
+        if accounts:
+            # Get default account or first one
+            default_account = next((acc for acc in accounts if acc.get('default', False)), accounts[0])
+            return {
+                'id': default_account.get('id', 'Unknown'),
+                'name': default_account.get('name', 'Unknown')
+            }
+        return {'id': 'Unknown', 'name': 'Unknown'}
+    except Exception as e:
+        print(f"Error loading account info from config.json: {e}")
+        return {'id': 'Unknown', 'name': 'Unknown'}
+
 def get_s3_path(base_path, use_previous_day=False):
     """Generate S3 path with date-based subdirectories using IST timezone"""
     ist = pytz.timezone('Asia/Kolkata')
@@ -272,7 +292,7 @@ def generate_security_group_chart(data):
     
     return base64.b64encode(image_png).decode('utf-8')
 
-def generate_html_report(data, output_file, old_data, route53_mapping=None, misc_info=None):
+def generate_html_report(data, output_file, old_data, route53_mapping=None, misc_info=None, account_info=None):
     """Generate an HTML report from the JSON data"""
     
     # Create sets of ARNs for comparison
@@ -296,6 +316,10 @@ def generate_html_report(data, output_file, old_data, route53_mapping=None, misc
         resource_type = item.get('type', 'unknown')
         resources_by_type[resource_type].append(item)
     
+    # Use default account info if not provided
+    if not account_info:
+        account_info = {'id': 'Unknown', 'name': 'Unknown'}
+    
     # Create HTML content with added styles for new and removed resources
     html_content = f"""
     <!DOCTYPE html>
@@ -303,7 +327,7 @@ def generate_html_report(data, output_file, old_data, route53_mapping=None, misc
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>AWS Public Resources Report</title>
+        <title>AWS Public Resources Report - {account_info['name']}</title>
         <style>
             body {{
                 font-family: Arial, sans-serif;
@@ -324,6 +348,14 @@ def generate_html_report(data, output_file, old_data, route53_mapping=None, misc
                 border-radius: 5px;
                 margin-bottom: 20px;
                 border-left: 5px solid #0066cc;
+            }}
+            .account-info {{
+                background-color: #e9ecef;
+                padding: 10px 15px;
+                border-radius: 3px;
+                margin-bottom: 15px;
+                font-weight: bold;
+                display: inline-block;
             }}
             .summary {{
                 display: flex;
@@ -487,6 +519,9 @@ def generate_html_report(data, output_file, old_data, route53_mapping=None, misc
         <div class="container">
             <div class="header">
                 <h1>AWS Public Resources Report</h1>
+                <div class="account-info">
+                    Account: {account_info['name']} ({account_info['id']})
+                </div>
                 <p>Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
                 <p>Total resources: {len(data)}</p>
                 <p>New resources: {len(current_arns - old_arns)}</p>
@@ -1039,9 +1074,13 @@ def generate_presigned_url(bucket, key, expiration=604800):
         print(f"Error generating presigned URL: {e}")
         return None
 
-def send_to_slack(token, message, channel, presigned_url=None):
+def send_to_slack(token, message, channel, presigned_url=None, account_name=None):
     """Send a message to Slack using a bot token and the Slack API with Block Kit format"""
     try:
+        # Set default account name if not provided
+        if not account_name:
+            account_name = "AWS"
+            
         # Slack API endpoint for posting messages
         url = "https://slack.com/api/chat.postMessage"
         
@@ -1060,7 +1099,7 @@ def send_to_slack(token, message, channel, presigned_url=None):
                         "type": "header",
                         "text": {
                             "type": "plain_text",
-                            "text": "AWS Public Resources Report Summary"
+                            "text": f"{account_name} Public Resources Report Summary"
                         }
                     },
                     {
@@ -1108,9 +1147,13 @@ def send_to_slack(token, message, channel, presigned_url=None):
         print(f"Error sending message to Slack: {e}")
         return False
 
-def prepare_slack_message(data, old_data, misc_info):
+def prepare_slack_message(data, old_data, misc_info, account_info=None):
     """Prepare a summary message for Slack without the presigned URL"""
     try:
+        # Use default account info if not provided
+        if not account_info:
+            account_info = {'id': 'Unknown', 'name': 'Unknown'}
+            
         # Create sets of ARNs for comparison
         current_arns = {item.get('arn') for item in data if 'arn' in item}
         old_arns = {item.get('arn') for item in old_data if old_data and 'arn' in item} if old_data else set()
@@ -1124,7 +1167,8 @@ def prepare_slack_message(data, old_data, misc_info):
             resource_types[resource_type] += 1
         
         # Create summary message
-        message = "*Summary*\n\n"
+        message = f"*AWS Account: {account_info['name']} ({account_info['id']})*\n\n"
+        message += "*Summary*\n\n"
         message += f"*Total resources:* {len(data)}\n"
         message += f"*New resources:* {len(current_arns - old_arns)}\n"
         message += f"*Removed resources:* {len(old_arns - current_arns)}\n"
@@ -1235,7 +1279,7 @@ Examples:
 
         route53_mapping, misc_info = process_csv_data(current_csv, old_csv)
     
-    generate_html_report(data, args.output, old_json, route53_mapping, misc_info)
+    generate_html_report(data, args.output, old_json, route53_mapping, misc_info, load_account_info())
 
     presigned_url = None
     if args.s3_bucket and args.s3_base_path:
@@ -1255,8 +1299,9 @@ Examples:
             # Send to Slack if token is provided
             if args.slack_token and args.slack_channel:
                 print(f"Sending summary to Slack channel: {args.slack_channel}")
-                slack_message = prepare_slack_message(data, old_json, misc_info)
-                send_to_slack(args.slack_token, slack_message, args.slack_channel, presigned_url)
+                account_info = load_account_info()
+                slack_message = prepare_slack_message(data, old_json, misc_info, account_info)
+                send_to_slack(args.slack_token, slack_message, args.slack_channel, presigned_url, account_info['name'])
         else:
             print("Failed to generate presigned URL for the report.")
 
