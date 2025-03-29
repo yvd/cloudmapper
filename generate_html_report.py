@@ -10,6 +10,7 @@ import boto3
 import os
 import traceback
 import pytz
+import requests
 
 def get_s3_client():
     """Create and return an S3 client"""
@@ -1038,6 +1039,109 @@ def generate_presigned_url(bucket, key, expiration=604800):
         print(f"Error generating presigned URL: {e}")
         return None
 
+def send_to_slack(token, message, channel, presigned_url=None):
+    """Send a message to Slack using a bot token and the Slack API with Block Kit format"""
+    try:
+        # Slack API endpoint for posting messages
+        url = "https://slack.com/api/chat.postMessage"
+        
+        # Prepare headers with authorization
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+        
+        # If we have a presigned URL, use Block Kit format for better formatting
+        if presigned_url:
+            payload = {
+                "channel": channel,
+                "blocks": [
+                    {
+                        "type": "header",
+                        "text": {
+                            "type": "plain_text",
+                            "text": "AWS Public Resources Report Summary"
+                        }
+                    },
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": message
+                        }
+                    },
+                    {
+                        "type": "actions",
+                        "elements": [
+                            {
+                                "type": "button",
+                                "text": {
+                                    "type": "plain_text",
+                                    "text": "View Complete Report"
+                                },
+                                "url": presigned_url,
+                                "style": "primary"
+                            }
+                        ]
+                    }
+                ]
+            }
+        else:
+            # Simple text message if no presigned URL
+            payload = {
+                "channel": channel,
+                "text": message
+            }
+        
+        # Send HTTP POST request to Slack API
+        response = requests.post(url, headers=headers, json=payload)
+        response_data = response.json()
+        
+        # Check if request was successful
+        if response.status_code == 200 and response_data.get("ok"):
+            print("Message sent to Slack successfully!")
+            return True
+        else:
+            print(f"Failed to send message to Slack. Status code: {response.status_code}, Response: {response_data}")
+            return False
+    except Exception as e:
+        print(f"Error sending message to Slack: {e}")
+        return False
+
+def prepare_slack_message(data, old_data, misc_info):
+    """Prepare a summary message for Slack without the presigned URL"""
+    try:
+        # Create sets of ARNs for comparison
+        current_arns = {item.get('arn') for item in data if 'arn' in item}
+        old_arns = {item.get('arn') for item in old_data if old_data and 'arn' in item} if old_data else set()
+        
+        # Count resources by type
+        resource_types = {}
+        for item in data:
+            resource_type = item.get('type', 'unknown')
+            if resource_type not in resource_types:
+                resource_types[resource_type] = 0
+            resource_types[resource_type] += 1
+        
+        # Create summary message
+        message = "*Summary*\n\n"
+        message += f"*Total resources:* {len(data)}\n"
+        message += f"*New resources:* {len(current_arns - old_arns)}\n"
+        message += f"*Removed resources:* {len(old_arns - current_arns)}\n"
+        
+        if misc_info:
+            message += f"*New Route 53 records:* {misc_info.get('new_r53_count', 0)}\n"
+            message += f"*Removed Route 53 records:* {misc_info.get('del_r53_count', 0)}\n"
+        
+        message += "\n*Resource Types:*\n"
+        for resource_type, count in resource_types.items():
+            message += f"• {resource_type.upper()}: {count}\n"
+        
+        return message
+    except Exception as e:
+        print(f"Error preparing Slack message: {e}")
+        return "AWS Public Resources Report is ready. Click the button below to view the complete report."
+
 def main():
     parser = argparse.ArgumentParser(
         description='Generate an HTML report from CloudMapper JSON data, visualizing AWS public resources with optional Route 53 mapping and resource change tracking.',
@@ -1091,6 +1195,14 @@ Examples:
     s3_group.add_argument('--presign-expiry', type=int, default=604800,
                          help='Expiration time for presigned URL in seconds (default: 7 days)')
     
+    # Slack arguments
+    slack_group = parser.add_argument_group('Slack Options')
+    slack_group.add_argument('--slack-token', default="",
+                           help='Slack bot token for sending notifications')
+    slack_group.add_argument('--slack-channel',
+                           default='#k8s_testing',
+                           help='Slack channel to send notifications to (default: #k8s_testing)')
+    
     args = parser.parse_args()
     
     data = load_cmap_json_from_local(args.input)
@@ -1125,6 +1237,7 @@ Examples:
     
     generate_html_report(data, args.output, old_json, route53_mapping, misc_info)
 
+    presigned_url = None
     if args.s3_bucket and args.s3_base_path:
         print(f"Uploading generated files to S3 bucket: {args.s3_bucket}")
         upload_generated_files_to_s3(args.s3_bucket, args.s3_base_path, args.output)
@@ -1138,6 +1251,12 @@ Examples:
             print("\nReport uploaded successfully!")
             print(f"Presigned URL (valid for {args.presign_expiry//3600} hours):")
             print(f"{presigned_url}")
+            
+            # Send to Slack if token is provided
+            if args.slack_token and args.slack_channel:
+                print(f"Sending summary to Slack channel: {args.slack_channel}")
+                slack_message = prepare_slack_message(data, old_json, misc_info)
+                send_to_slack(args.slack_token, slack_message, args.slack_channel, presigned_url)
         else:
             print("Failed to generate presigned URL for the report.")
 
