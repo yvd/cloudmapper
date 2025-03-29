@@ -34,11 +34,17 @@ def download_from_s3(bucket, key):
         print(f"Error downloading from S3: {e}")
         return None
 
-def upload_to_s3(bucket, key, content):
+def upload_to_s3(bucket, key, content, content_type=None):
     """Upload content to S3"""
     try:
         s3_client = get_s3_client()
-        s3_client.put_object(Bucket=bucket, Key=key, Body=content)
+        params = {'Bucket': bucket, 'Key': key, 'Body': content}
+        
+        # Add content type if provided
+        if content_type:
+            params['ContentType'] = content_type
+            
+        s3_client.put_object(**params)
         print(f"Successfully uploaded {key} to {bucket}")
     except Exception as e:
         print(f"Error uploading to S3: {e}")
@@ -49,28 +55,28 @@ def upload_generated_files_to_s3(bucket, base_path, output_file):
         # Generate the S3 path with date-based subdirectories
         s3_path = get_s3_path(base_path)
         
-        # Upload the HTML report
+        # Upload the HTML report with the correct content type
         with open(output_file, 'r') as f:
             s3_key = f"{s3_path}/{output_file}"
-            upload_to_s3(bucket, s3_key, f.read())
+            upload_to_s3(bucket, s3_key, f.read(), content_type='text/html')
         
         # Upload the vpn_ips.txt file
         if os.path.exists('vpn_ips.txt'):
             with open('vpn_ips.txt', 'r') as f:
                 s3_key = f"{s3_path}/vpn_ips.txt"
-                upload_to_s3(bucket, s3_key, f.read())
+                upload_to_s3(bucket, s3_key, f.read(), content_type='text/plain')
 
         # Upload the public_out.json if it exists
         if os.path.exists('public_out.json'):
             with open('public_out.json', 'r') as f:
                 s3_key = f"{s3_path}/public_out.json"
-                upload_to_s3(bucket, s3_key, f.read())
+                upload_to_s3(bucket, s3_key, f.read(), content_type='application/json')
         
         # Upload r53 csv file
         if os.path.exists('output_r53.csv'):
             with open('output_r53.csv', 'r') as f:
                 s3_key = f"{s3_path}/output_r53.csv"
-                upload_to_s3(bucket, s3_key, f.read())
+                upload_to_s3(bucket, s3_key, f.read(), content_type='text/csv')
         print(f"Successfully uploaded all generated files to S3 bucket: {bucket} under path: {s3_path}")
     except Exception as e:
         print(f"Error uploading generated files to S3: {e}")
@@ -1013,6 +1019,25 @@ def generate_html_report(data, output_file, old_data, route53_mapping=None, misc
     
     print(f"HTML report generated: {output_file}")
 
+def generate_presigned_url(bucket, key, expiration=604800):
+    """Generate a presigned URL for an S3 object that expires after specified seconds (default 7 days)"""
+    try:
+        # Create an S3 client with the correct signature version and region
+        s3_client = boto3.client(
+            's3',
+            region_name='ap-south-1',
+            config=boto3.session.Config(signature_version='s3v4')
+        )
+        url = s3_client.generate_presigned_url(
+            'get_object',
+            Params={'Bucket': bucket, 'Key': key},
+            ExpiresIn=expiration
+        )
+        return url
+    except Exception as e:
+        print(f"Error generating presigned URL: {e}")
+        return None
+
 def main():
     parser = argparse.ArgumentParser(
         description='Generate an HTML report from CloudMapper JSON data, visualizing AWS public resources with optional Route 53 mapping and resource change tracking.',
@@ -1063,6 +1088,8 @@ Examples:
                          help='S3 bucket name for reading/writing files')
     s3_group.add_argument('--s3-base-path', default='border_police',
                          help='Base path in S3 bucket (e.g., border_police)')
+    s3_group.add_argument('--presign-expiry', type=int, default=604800,
+                         help='Expiration time for presigned URL in seconds (default: 7 days)')
     
     args = parser.parse_args()
     
@@ -1080,6 +1107,7 @@ Examples:
         old_json = load_cmap_json_from_s3(args.s3_bucket, args.s3_base_path, "public_out.json")
 
     route53_mapping = None
+    misc_info = {'new_r53_count': 0, 'del_r53_count': 0}
     if args.route53:
         current_csv = load_r53_csv_from_local(args.route53)
         if not current_csv:
@@ -1097,8 +1125,21 @@ Examples:
     
     generate_html_report(data, args.output, old_json, route53_mapping, misc_info)
 
-    # if args.s3_bucket and args.s3_base_path:
-    #     upload_generated_files_to_s3(args.s3_bucket, args.s3_base_path, args.output)
+    if args.s3_bucket and args.s3_base_path:
+        print(f"Uploading generated files to S3 bucket: {args.s3_bucket}")
+        upload_generated_files_to_s3(args.s3_bucket, args.s3_base_path, args.output)
+        
+        # Generate presigned URL for the report
+        s3_path = get_s3_path(args.s3_base_path)
+        s3_key = f"{s3_path}/{args.output}"
+        presigned_url = generate_presigned_url(args.s3_bucket, s3_key, args.presign_expiry)
+        
+        if presigned_url:
+            print("\nReport uploaded successfully!")
+            print(f"Presigned URL (valid for {args.presign_expiry//3600} hours):")
+            print(f"{presigned_url}")
+        else:
+            print("Failed to generate presigned URL for the report.")
 
 if __name__ == "__main__":
-    main() 
+    main()
